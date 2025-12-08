@@ -1,20 +1,15 @@
 # SaR-PaM (Self-Balancing Robot with Path Memorization)
 
-**Real-Time System and Internet of Things Final Project**  
-Department of Electrical Engineering, Universitas Indonesia  
+**Real-Time System and Internet of Things Final Project**  
+Department of Electrical Engineering, Universitas Indonesia  
 
 ---
 
 ## Introduction
 
-SaR-PaM (Self-Balancing Robot with Path Memorization) adalah robot dua roda berbasis **ESP32** yang dirancang untuk menjaga keseimbangan secara real-time menggunakan **sensor IMU** dan **algoritma PID**. Selain itu, robot ini dibangun untuk mampu merekam jalur pergerakan serta mengulang kembali jalur tersebut (path memorization).
+SaR-PaM (Self-Balancing Robot with Path Memorization) adalah robot dua roda berbasis **ESP32 DevKit V1** yang dirancang untuk menjaga keseimbangan secara real-time menggunakan **sensor MPU6050** dan **algoritma PID**. Proyek ini menerapkan arsitektur **Dual-Core FreeRTOS**, di mana proses penyeimbangan (balancing) dipisahkan dari proses komunikasi untuk menjamin stabilitas maksimal.
 
-Sistem juga mendukung dua metode komunikasi:
-
-- **WiFi (WebSocket)** — kontrol jarak jauh dan telemetry
-- **Bluetooth** — kontrol jarak dekat dengan latensi rendah
-
-Keseluruhan proses berjalan dengan arsitektur **FreeRTOS multitasking**, sehingga balancing, komunikasi, dan path memorization dapat bekerja paralel tanpa saling mengganggu.
+Fitur unggulan dari robot ini adalah **Path Memorization** berbasis perintah, di mana robot dapat merekam urutan instruksi gerak dari pengguna dan memutar ulang (replay) jalur tersebut secara otomasis. Pengendalian dilakukan melalui antarmuka website berbasis **ReactJS** yang berkomunikasi via **WebSocket** dengan latensi rendah.
 
 ---
 
@@ -22,33 +17,36 @@ Keseluruhan proses berjalan dengan arsitektur **FreeRTOS multitasking**, sehingg
 
 ### Hardware Components
 
-- ESP32 microcontroller  
-- IMU sensor (gyroscope + accelerometer)  
-- Dual DC motor with motor driver  
-- Power management module  
-- Battery pack (Li-ion / Li-Po)  
+- **Microcontroller:** ESP32 DevKit V1 (Type-C)
+- **IMU Sensor:** MPU6050 (6-Axis Accelerometer & Gyroscope)
+- **Motor Driver:** L298N Dual H-Bridge
+- **Actuators:** 2x DC Gearbox Motors (Yellow TT Motors)
+- **Power Source:** 2x Li-Ion Batteries
+- **Input:** Push Button (GPIO 0) untuk *Wake-up* dari mode Sleep.
 
 ### Software Architecture
 
-Software dikembangkan di **Arduino IDE**, memanfaatkan **FreeRTOS** untuk menjalankan beberapa task paralel:
+Sistem perangkat lunak dibangun menggunakan **Arduino IDE** dengan penerapan **FreeRTOS** yang membagi beban kerja ke dalam dua *core* prosesor secara simultan:
 
-- **IMU Processing & PID Balancing**  
-  Membaca sudut, menerapkan filter, dan menjalankan kontrol PID.
+1.  **Motion Control Task (Core 1 - High Priority)**
+    * Bertanggung jawab penuh atas loop PID.
+    * Membaca data sensor MPU6050 menggunakan *External Interrupt* (INT) untuk sinkronisasi data presisi.
+    * Menghitung output PID dan menggerakkan motor secara langsung.
+    * Mendeteksi kondisi jatuh (*Failsafe*); jika sudut miring ekstrem (>10 detik), sistem memicu *Light Sleep*.
 
-- **Path Memorization Module**  
-  Mencatat pergerakan motor dan waktu tempuh untuk replay.
+2.  **Network & Logic Task (Core 0 - Low Priority)**
+    * Menangani koneksi WiFi dan server WebSocket.
+    * Menerima instruksi JSON dari klien (ReactJS) dan meneruskannya ke Core 1 melalui **FreeRTOS Queue**.
+    * Mengelola logika *Path Memorization* (Perekaman dan Replay).
 
-- **WebSocket Control Module (WiFi)**  
-  Kendali remote + pengiriman telemetry.
+3.  **Website Remote Controller (Frontend)**
+    * **Command Transmission:** Mengirimkan paket instruksi berformat JSON ke ESP32 via WebSocket.
+    * **Connection Management:** Memantau status koneksi jaringan secara *real-time*.
+    * **Input Handling:** Menerjemahkan interaksi pengguna (Button/Touch) menjadi sinyal kendali navigasi dan fitur *Record/Play*.
 
-- **Bluetooth Control Module**  
-  Kendali lokal dengan latensi rendah.
-
-- **Motor Control Module**  
-  PWM untuk kedua motor, berjalan pada interval tetap menggunakan software timer.
-
-- **Telemetry System**  
-  Mengirim informasi seperti sudut IMU, output PID, status baterai, dan mode operasi.
+4.  **Path Memorization Module (Shared Resource)**
+    * **Command Logging:** Mencatat urutan instruksi ("FORWARD", "LEFT", dll) ke dalam `std::vector` yang dilindungi oleh **Mutex**.
+    * **Step-based Replay:** Menggunakan **Software Timer** (500ms interval) untuk mengeksekusi ulang perintah yang tersimpan tanpa memblokir loop utama.
 
 ---
 
@@ -56,51 +54,41 @@ Software dikembangkan di **Arduino IDE**, memanfaatkan **FreeRTOS** untuk menjal
 
 ### Testing Performed
 
-Pengujian dilakukan pada beberapa aspek utama:
+Pengujian dilakukan untuk memvalidasi integrasi hardware dan software:
 
-1. **Balancing Test**  
-   Menilai stabilitas robot saat maju, mundur, dan berbelok.
-
-2. **WiFi Control Test**  
-   Mengukur delay respons, akurasi perintah, dan jangkauan.
-
-3. **Bluetooth Control Test**  
-   Mengukur latensi, stabilitas koneksi, serta kompatibilitas dengan balancing system.
-
-4. **Mode Switching Test**  
-   Verifikasi switching otomatis/manual antara WiFi ↔ Bluetooth.
-
-5. **Power Consumption Test**  
-   Mencatat perubahan konsumsi daya ketika modul komunikasi dimatikan.
+1.  **Balancing Stability Test**
+    * Menguji kemampuan robot berdiri diam dan menanggapi gangguan eksternal (dorongan ringan).
+2.  **Communication Latency Test**
+    * Mengukur responsivitas robot terhadap perintah dari Website Controller via WebSocket.
+3.  **Path Replay Accuracy**
+    * Memverifikasi apakah robot dapat mengulang urutan gerakan yang direkam (Maju -> Putar -> Mundur) dengan urutan yang benar.
+4.  **Power Management (Safety) Test**
+    * Memastikan motor mati otomatis dan ESP32 masuk ke mode *Light Sleep* saat robot terjatuh, serta dapat dibangunkan kembali dengan tombol BOOT.
 
 ### Evaluation Summary
 
-- Robot berhasil menjaga **keseimbangan stabil** menggunakan IMU + PID.  
-- Kontrol **WiFi** berjalan responsif dan mendukung telemetry real-time.  
-- Kontrol **Bluetooth** memberikan latensi paling rendah untuk kendali dekat.  
-- Switching mode **WiFi ↔ Bluetooth** berfungsi tanpa mengganggu balancing.  
-- Sistem FreeRTOS bekerja deterministik dan responsif.
+* **Stabilitas:** Robot mampu menjaga keseimbangan dengan responsif berkat pemisahan *Core* (PID di Core 1 tidak terganggu oleh aktivitas WiFi di Core 0).
+* **Kendali Jarak Jauh:** Komunikasi WebSocket terbukti handal untuk mengirimkan perintah navigasi *real-time* tanpa *jitter* pada motor.
+* **Fitur Memori:** Mekanisme *Command-Based Recording* berhasil menyimpan dan memutar ulang logika pergerakan, meskipun akurasi jarak bergantung pada kondisi permukaan lantai (karena tidak menggunakan *encoder*).
+* **Efisiensi Daya:** Fitur *Auto-Sleep* berfungsi efektif mencegah pemborosan baterai dan panas berlebih pada motor saat robot tidak sengaja terjatuh.
 
 ---
 
 ## Conclusion
 
-Proyek SaR-PaM berhasil mengintegrasikan balancing system, path memorization, dan dual communication mode dalam satu platform robot berbasis ESP32. Melalui implementasi multitasking FreeRTOS, robot mampu menjalankan balancing, komunikasi, dan recording jalur secara paralel dengan stabil.
+Proyek SaR-PaM berhasil membangun platform robot penyeimbang yang stabil dan interaktif. Implementasi **FreeRTOS** terbukti krusial dalam menangani *multitasking* antara algoritma penyeimbang yang sensitif terhadap waktu dan komunikasi jaringan yang berat.
 
-Fitur-fitur utama seperti kontrol melalui WiFi dan Bluetooth, replay jalur, dan mode switching telah berhasil diuji dan memenuhi acceptance criteria. Proyek ini dapat dikembangkan lebih lanjut menuju robot semi-otonom dengan penambahan fitur seperti obstacle detection atau mapping.
+Fitur **Path Memorization** memberikan nilai tambah unik, memungkinkan robot untuk melakukan navigasi semi-otomatis berdasarkan riwayat perintah. Secara keseluruhan, sistem ini telah memenuhi *acceptance criteria*. Pengembangan selanjutnya disarankan untuk menggunakan **Stepper Motor** guna meningkatkan presisi replay jalur dan **PCB Custom** untuk distribusi bobot yang lebih merata.
 
 ---
 
 ## References
 
-1. "Module 1 - Introduction to SMP with RTOS," digilabdte. [Online]. Available: <https://learn.digilabdte.com/books/internet-of-things/chapter/module-1-introduction-to-smp-with-rtos> (Accessed: Dec. 7, 2025).
-2. "Module 2 - Task Management," digilabdte. [Online]. Available: <https://learn.digilabdte.com/books/internet-of-things/chapter/module-2-task-management> (Accessed: Dec. 7, 2025).
-3. "Module 3 - Memory Management & Queue," digilabdte. [Online]. Available: <https://learn.digilabdte.com/books/internet-of-things/chapter/module-3-memory-management-queue> (Accessed: Dec. 7, 2025).
-4. "Module 4 - Deadlock & Synchronization," digilabdte. [Online]. Available: <https://learn.digilabdte.com/books/internet-of-things/chapter/module-4-deadlock-synchronization> (Accessed: Dec. 7, 2025).
-5. "Module 5 - Software Timer," digilabdte. [Online]. Available: <https://learn.digilabdte.com/books/internet-of-things/chapter/module-5-software-timer> (Accessed: Dec. 7, 2025).
-6. "Module 6 - Bluetooth & BLE," digilabdte. [Online]. Available: <https://learn.digilabdte.com/books/internet-of-things/chapter/module-6-bluetooth-ble> (Accessed: Dec. 7, 2025).
-7. "Module 7 - MQTT, HTTP, WIFI," digilabdte. [Online]. Available: <https://learn.digilabdte.com/books/internet-of-things/chapter/module-7-mqtt-http-wifi> (Accessed: Dec. 7, 2025).
-8. "Module 8 - Power Management," digilabdte. [Online]. Available: <https://learn.digilabdte.com/books/internet-of-things/chapter/module-8-power-management> (Accessed: Dec. 7, 2025).
-9. Instructables, “DIY ESP32 Wifi Self Balancing Robot - B-Robot ESP32 Arduino Programing,” Instructables, Sep. 19, 2021. [Online]. Available: <https://www.instructables.com/DIY-ESP32-Wifi-Self-Balancing-Robot-B-Robot-ESP32-/> (Accessed: Dec. 7, 2025).
-10. "Bluetooth® Low Energy (Bluetooth LE)," espressif. [Online]. Available: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/bluetooth/bt_le.html> (Accessed: Dec. 7, 2025).
-11. "Bluetooth® Architecture," espressif. [Online]. Available: <https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/bt-architecture/index.html> (Accessed: Dec. 7, 2025).
+1.  "Module 1 - Introduction to SMP with RTOS," digilabdte. [Online]. Available: [https://learn.digilabdte.com/books/internet-of-things/chapter/module-1-introduction-to-smp-with-rtos](https://learn.digilabdte.com/books/internet-of-things/chapter/module-1-introduction-to-smp-with-rtos) (Accessed: Dec. 7, 2025).
+2.  "Module 2 - Task Management," digilabdte. [Online]. Available: [https://learn.digilabdte.com/books/internet-of-things/chapter/module-2-task-management](https://learn.digilabdte.com/books/internet-of-things/chapter/module-2-task-management) (Accessed: Dec. 7, 2025).
+3.  "Module 3 - Memory Management & Queue," digilabdte. [Online]. Available: [https://learn.digilabdte.com/books/internet-of-things/chapter/module-3-memory-management-queue](https://learn.digilabdte.com/books/internet-of-things/chapter/module-3-memory-management-queue) (Accessed: Dec. 7, 2025).
+4.  "Module 4 - Deadlock & Synchronization," digilabdte. [Online]. Available: [https://learn.digilabdte.com/books/internet-of-things/chapter/module-4-deadlock-synchronization](https://learn.digilabdte.com/books/internet-of-things/chapter/module-4-deadlock-synchronization) (Accessed: Dec. 7, 2025).
+5.  "Module 5 - Software Timer," digilabdte. [Online]. Available: [https://learn.digilabdte.com/books/internet-of-things/chapter/module-5-software-timer](https://learn.digilabdte.com/books/internet-of-things/chapter/module-5-software-timer) (Accessed: Dec. 7, 2025).
+6.  "Module 7 - MQTT, HTTP, WIFI," digilabdte. [Online]. Available: [https://learn.digilabdte.com/books/internet-of-things/chapter/module-7-mqtt-http-wifi](https://learn.digilabdte.com/books/internet-of-things/chapter/module-7-mqtt-http-wifi) (Accessed: Dec. 7, 2025).
+7.  "Module 8 - Power Management," digilabdte. [Online]. Available: [https://learn.digilabdte.com/books/internet-of-things/chapter/module-8-power-management](https://learn.digilabdte.com/books/internet-of-things/chapter/module-8-power-management) (Accessed: Dec. 7, 2025).
+8.  Instructables, “DIY ESP32 Wifi Self Balancing Robot - B-Robot ESP32 Arduino Programing,” Instructables, Sep. 19, 2021. [Online]. Available: [https://www.instructables.com/DIY-ESP32-Wifi-Self-Balancing-Robot-B-Robot-ESP32-/](https://www.instructables.com/DIY-ESP32-Wifi-Self-Balancing-Robot-B-Robot-ESP32-/) (Accessed: Dec. 7, 2025).
